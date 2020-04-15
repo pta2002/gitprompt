@@ -7,12 +7,18 @@
 #include <stdio.h>
 #include <string.h>
 #include <git2.h>
+
+static const char *branch_name;  // Name of the current branch
+static git_status_list *status;
+static int change_num;           // Amount of changes
+
 #include "config.h"
 
 const char *get_current_branch_name(git_repository*);
 
 int main() {
     git_repository* repo; // The repository
+    int error;
 
     // Initialize libgit2
     // This is used to get all git status necessary
@@ -26,13 +32,33 @@ int main() {
         return 1;
     }
 
-    const char *branch = get_current_branch_name(repo);
-    printf("%s\n", branch);
+#ifdef HAVE_BRANCH_STATUS
+    git_status_options opts;
+    git_status_options_init(&opts, 1);
+    if (error = git_status_list_new(&status, repo, &opts))
+        return error;
+    change_num = git_status_list_entrycount(status);
+#endif
+
+#ifdef HAVE_BRANCH_NAME
+    // I have to put this after getting the branch status or it will not show the branch
+    // name on some repos (at least for the linux kernel repo I tested this on
+    branch_name = get_current_branch_name(repo);
+#endif
+
+    print_status();
 
     return 0;
 }
 
+#ifdef HAVE_BRANCH_NAME
 // Get the name of the current branch.
+// libgit2 seems to have issues with getting the name of the current branch if
+// there are no commits, so in that case for now we're just defaulting to "master"
+// (which will likely be the case anyway), in the future we can either fix this
+// or even manually parse the HEAD file, which would tell us the name of the branch.
+// (or maybe just grep `git status`, which does tell you the current branch, though
+// that's less ideal).
 const char *get_current_branch_name(git_repository *repo) {
     git_reference *head;
     const char *name;
@@ -56,3 +82,4 @@ const char *get_current_branch_name(git_repository *repo) {
 
     return name;
 }
+#endif

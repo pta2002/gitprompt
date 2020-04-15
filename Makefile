@@ -1,2 +1,5 @@
 gitprompt: gitprompt.c
-	gcc -O0 -o gitprompt gitprompt.c -lgit2
+	gcc -Ofast -o gitprompt gitprompt.c -lgit2 -I.
+
+run: gitprompt
+	./gitprompt
