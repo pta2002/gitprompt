@@ -6,80 +6,111 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <git2.h>
 
 static const char *branch_name;  // Name of the current branch
-static git_status_list *status;
 static int change_num;           // Amount of changes
 
 #include "config.h"
 
-const char *get_current_branch_name(git_repository*);
+#define error(X) fprintf(stderr, "gitprompt: " X "\n")
+
+typedef struct gitstatus {
+    char *branch_name;
+    int change_count;
+} gitstatus;
+
+typedef enum mode {
+    READING_HASH,
+    READING_BRANCH,
+    SEEKING_END,
+    COUNTING_ENTRIES
+} MODE;
 
 int main() {
-    git_repository* repo; // The repository
     int error;
+    FILE *fp;
 
-    // Initialize libgit2
-    // This is used to get all git status necessary
-    git_libgit2_init();
-
-    // Detect if we are inside a git repo. If we are, populate the repo variable.
-    if (git_repository_open_ext(&repo, NULL, GIT_REPOSITORY_OPEN_FROM_ENV, NULL)) {
-        // We are not inside a git repo.
-        // This will probably happen most of the time, since it'll be run as part of
-        // the prompt, just return 1 and don't waste any more valuable time.
-        return 1;
+    // git status --porcelain=v1 -b formats the git status output in a nicely
+    // machine-readable format. We use -b as well so that the branch is
+    // included in the output, since for some reason it isn't by default.
+    // By using -z, we get our output separated by '0' instead of '\n', which
+    // is handy for parsing
+    //
+    // This command lets us get most of what we will ever need for a shell
+    // prompt.
+    //
+    // In the future maybe try something more direct than popen. It adds ~4ms
+    // that we wouldn't get if we just used stdin and piped in git status to
+    // the program
+    if ((fp = fopen("git status --porcelain=v1 -b -z", "r")) == NULL) {
+        error("failed to run git");
+        return -2;
     }
 
-#ifdef HAVE_BRANCH_STATUS
-    git_status_options opts;
-    git_status_options_init(&opts, 1);
-    if (error = git_status_list_new(&status, repo, &opts))
-        return error;
-    change_num = git_status_list_entrycount(status);
-#endif
 
-#ifdef HAVE_BRANCH_NAME
-    // I have to put this after getting the branch status or it will not show the branch
-    // name on some repos (at least for the linux kernel repo I tested this on
-    branch_name = get_current_branch_name(repo);
-#endif
+    // Time to parse the output. It's actually fairly complex, but we only
+    // care about the branch, which will always be on the first line (due to
+    // specifying -b) and the _number_ of changes, not the changes themselves,
+    // so we can just count all lines after the first.
+    // See also: https://git-scm.com/docs/git-status#_output
+    int currentchar;
+    int branch_pos = 0;
+    gitstatus *s;
+    MODE mode = READING_HASH;
 
-    print_status();
+    if ((s = malloc(sizeof(gitstatus))) == NULL
+            || (s->branch_name = malloc(sizeof(128))) == NULL) {
+        error("failed to allocate memory");
+        return -1;
+    }
+
+    while ((currentchar = fgetc(fp)) != EOF) {
+        // Prepare for very bad parsing code.
+        // The format is more or less this:
+        //
+        // ##local-head...remote-head
+        // XY file (-> file2)
+        //
+        // Due to using -z, it's all separated by '\0' characters, so not very
+        // difficult to parse.
+
+        switch (mode) {
+            case READING_HASH:
+                // Just ignore it until it's not a # or a space, at that point
+                // we switch to reading a branch
+
+                if (currentchar != '#' && currentchar != ' ') {
+                    mode = READING_BRANCH;
+                } else
+                    break; // Only break if we're not carrying on to read
+            case READING_BRANCH:
+                // Now we are finally reading the branch name
+                // We can just wait until we find a character that isn't part
+                // of the branch name
+                if (currentchar && currentchar != '.' && currentchar != '\n'
+                        && branch_pos < 127) {
+                    s->branch_name[branch_pos] = currentchar;
+                    branch_pos++;
+                    break;
+                } else {
+                    s->branch_name[branch_pos] = 0;
+                    mode = SEEKING_END;
+                }
+            case SEEKING_END:
+                // At this point, we're just waiting to finish the master
+                // branch line, so we just wait for a '\0' and change
+                // mode as soon as we do, so we begin counting the entries
+                if (currentchar == 0)
+                    mode = COUNTING_ENTRIES;
+                break;
+            case COUNTING_ENTRIES:
+                if (currentchar == 0)
+                    s->change_count++;
+                break;
+        }
+    }
+
+    printf("%s, %d\n", s->branch_name, s->change_count);
 
     return 0;
 }
-
-#ifdef HAVE_BRANCH_NAME
-// Get the name of the current branch.
-// libgit2 seems to have issues with getting the name of the current branch if
-// there are no commits, so in that case for now we're just defaulting to "master"
-// (which will likely be the case anyway), in the future we can either fix this
-// or even manually parse the HEAD file, which would tell us the name of the branch.
-// (or maybe just grep `git status`, which does tell you the current branch, though
-// that's less ideal).
-const char *get_current_branch_name(git_repository *repo) {
-    git_reference *head;
-    const char *name;
-    int error;
-
-    error = git_repository_head(&head, repo);
-
-#ifdef UNBORN_SHOW
-    // Get the repository name
-    if (error == GIT_EUNBORNBRANCH)
-        return UNBORN_REPO_NAME;
-#endif
-    // The repository isn't unborn; so if there's an error just return.
-    // In this case, we don't want to do anything in case the repository is unborn,
-    // so just return.
-    if (error)
-        return NULL;
-
-    name = git_reference_shorthand(head);
-    git_reference_free(head);
-
-    return name;
-}
-#endif
