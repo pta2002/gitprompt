@@ -39,13 +39,12 @@ int main() {
     // In the future maybe try something more direct than popen. It adds ~4ms
     // that we wouldn't get if we just used stdin and piped in git status to
     // the program
-    if ((fp = popen("git status --porcelain=v1 -b -z", "r")) == NULL) {
+    //
+    // TODO call this directly instead of using popen and relying on a shell
+    if ((fp = popen("git status --porcelain=v1 -b -z 2> /dev/null", "r")) == NULL) {
         error("failed to run git");
         return -2;
     }
-
-    /* fp = stdin; */
-
 
     // Time to parse the output. It's actually fairly complex, but we only
     // care about the branch, which will always be on the first line (due to
@@ -108,6 +107,11 @@ int main() {
                 break;
         }
     }
+
+    int status = pclose(fp);
+
+    if (status)
+        return status;
 
     show_prompt(s);
 
