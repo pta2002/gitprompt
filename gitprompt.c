@@ -7,17 +7,14 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *branch_name;  // Name of the current branch
-static int change_num;           // Amount of changes
-
-#include "config.h"
-
 #define error(X) fprintf(stderr, "gitprompt: " X "\n")
 
 typedef struct gitstatus {
     char *branch_name;
     int change_count;
 } gitstatus;
+
+#include "config.h"
 
 typedef enum mode {
     READING_HASH,
@@ -42,10 +39,12 @@ int main() {
     // In the future maybe try something more direct than popen. It adds ~4ms
     // that we wouldn't get if we just used stdin and piped in git status to
     // the program
-    if ((fp = fopen("git status --porcelain=v1 -b -z", "r")) == NULL) {
+    if ((fp = popen("git status --porcelain=v1 -b -z", "r")) == NULL) {
         error("failed to run git");
         return -2;
     }
+
+    /* fp = stdin; */
 
 
     // Time to parse the output. It's actually fairly complex, but we only
@@ -110,7 +109,7 @@ int main() {
         }
     }
 
-    printf("%s, %d\n", s->branch_name, s->change_count);
+    show_prompt(s);
 
     return 0;
 }
