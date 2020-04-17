@@ -87,6 +87,15 @@ int main() {
                 // of the branch name
                 if (currentchar && currentchar != '.' && currentchar != '\n'
                         && branch_pos < 127) {
+                    // We only find a space if the repo has no commits
+                    // ("No commits yet on brach master"), so if we just
+                    // reset the branch name on a space we'll get just the
+                    // last word, which is the branch name.
+                    if (currentchar == ' ') {
+                        branch_pos = 0;
+                        break;
+                    }
+
                     s->branch_name[branch_pos] = currentchar;
                     branch_pos++;
                     break;
