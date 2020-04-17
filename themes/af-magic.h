@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include "colors.h"
+#include "gitprompt.h"
 
 #define HAVE_BRANCH_NAME    // exposes variable `branch_name` with the branch name
 #define HAVE_BRANCH_STATUS  // exposes variable `change_num`

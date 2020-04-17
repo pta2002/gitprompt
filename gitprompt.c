@@ -6,14 +6,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-
-#define error(X) fprintf(stderr, "gitprompt: " X "\n")
-
-typedef struct gitstatus {
-    char *branch_name;
-    int change_count;
-} gitstatus;
-
+#include "gitprompt.h"
 #include "config.h"
 
 typedef enum mode {
@@ -117,11 +110,14 @@ int main() {
         }
     }
 
+    // If there is an error with git (for example, we are not in a git
+    // repository), exit the program.
     int status = pclose(fp);
-
     if (status)
         return status;
 
+    // Call the theme's show_prompt function, this will be be included via
+    // config.h, since it'll include the theme file.
     show_prompt(s);
 
     return 0;
