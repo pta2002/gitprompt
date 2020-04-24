@@ -1,0 +1,5 @@
+#+TITLE: Todo
+
+* TODO Fix ZSH prompt output
+This (should?) be fixable by adding %{%} around the color escape sequences, need
+further testing!
