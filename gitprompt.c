@@ -5,9 +5,12 @@
 
 #include "gitprompt.h"
 #include "config.h"
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 typedef enum mode {
   READING_HASH,
@@ -17,8 +20,6 @@ typedef enum mode {
 } MODE;
 
 int main() {
-  FILE *fp;
-
   // git status --porcelain=v1 -b formats the git status output in a nicely
   // machine-readable format. We use -b as well so that the branch is
   // included in the output, since for some reason it isn't by default.
@@ -28,16 +29,22 @@ int main() {
   // This command lets us get most of what we will ever need for a shell
   // prompt.
   //
-  // In the future maybe try something more direct than popen. It adds ~4ms
-  // that we wouldn't get if we just used stdin and piped in git status to
-  // the program
-  //
-  // TODO call this directly instead of using popen and relying on a shell
-  if ((fp = popen("git status --porcelain=v1 -b -z 2> /dev/null", "r")) ==
-      NULL) {
-    error("failed to run git");
-    return -2;
+  // To improve performance, we handle the execution manually, instead of
+  // relying on popen. This saves around 10ms and halves execution time, so
+  // it's definitely worth the extra code!
+  int pipes[2];
+  int pid;
+  pipe(pipes);
+  if (!(pid = fork())) {
+    int null = open("/dev/null", O_WRONLY);
+    dup2(pipes[1], 1);
+    close(pipes[0]);
+    dup2(null, 2);
+    execlp("git", "git", "status", "--porcelain=v1", "-b", "-z", NULL);
+    _exit(0);
   }
+
+  close(pipes[1]);
 
   // Time to parse the output. It's actually fairly complex, but we only
   // care about the branch, which will always be on the first line (due to
@@ -48,6 +55,7 @@ int main() {
   int branch_pos = 0;
   gitstatus *s;
   MODE mode = READING_HASH;
+  char buf[512];
 
   if ((s = malloc(sizeof(gitstatus))) == NULL ||
       (s->branch_name = malloc(128)) == NULL) {
@@ -55,64 +63,73 @@ int main() {
     return -1;
   }
 
-  while ((currentchar = fgetc(fp)) != EOF) {
-    // Prepare for very bad parsing code.
-    // The format is more or less this:
-    //
-    // ##local-head...remote-head
-    // XY file (-> file2)
-    //
-    // Due to using -z, it's all separated by '\0' characters, so not very
-    // difficult to parse.
+  int bytes_read;
 
-    switch (mode) {
-    case READING_HASH:
-      // Just ignore it until it's not a # or a space, at that point
-      // we switch to reading a branch
+  while ((bytes_read = read(pipes[0], buf, 512)) != 0) {
+    for (int i = 0; i < bytes_read; i++) {
+      currentchar = buf[i];
+      // Prepare for very bad parsing code.
+      // The format is more or less this:
+      //
+      // ##local-head...remote-head
+      // XY file (-> file2)
+      //
+      // Due to using -z, it's all separated by '\0' characters, so not very
+      // difficult to parse.
 
-      if (currentchar != '#' && currentchar != ' ') {
-        mode = READING_BRANCH;
-      } else
-        break; // Only break if we're not carrying on to read
-    case READING_BRANCH:
-      // Now we are finally reading the branch name
-      // We can just wait until we find a character that isn't part
-      // of the branch name
-      if (currentchar && currentchar != '.' && currentchar != '\n' &&
-          branch_pos < 127) {
-        // We only find a space if the repo has no commits
-        // ("No commits yet on brach master"), so if we just
-        // reset the branch name on a space we'll get just the
-        // last word, which is the branch name.
-        if (currentchar == ' ') {
-          branch_pos = 0;
+      switch (mode) {
+      case READING_HASH:
+        // Just ignore it until it's not a # or a space, at that point
+        // we switch to reading a branch
+
+        if (currentchar != '#' && currentchar != ' ') {
+          mode = READING_BRANCH;
+        } else
+          break; // Only break if we're not carrying on to read
+      case READING_BRANCH:
+        // Now we are finally reading the branch name
+        // We can just wait until we find a character that isn't part
+        // of the branch name
+        if (currentchar && currentchar != '.' && currentchar != '\n' &&
+            branch_pos < 127) {
+          // We only find a space if the repo has no commits
+          // ("No commits yet on brach master"), so if we just
+          // reset the branch name on a space we'll get just the
+          // last word, which is the branch name.
+          if (currentchar == ' ') {
+            branch_pos = 0;
+            break;
+          }
+
+          s->branch_name[branch_pos] = currentchar;
+          branch_pos++;
           break;
+        } else {
+          s->branch_name[branch_pos] = 0;
+          mode = SEEKING_END;
         }
-
-        s->branch_name[branch_pos] = currentchar;
-        branch_pos++;
+      case SEEKING_END:
+        // At this point, we're just waiting to finish the master
+        // branch line, so we just wait for a '\0' and change
+        // mode as soon as we do, so we begin counting the entries
+        if (currentchar == 0)
+          mode = COUNTING_ENTRIES;
         break;
-      } else {
-        s->branch_name[branch_pos] = 0;
-        mode = SEEKING_END;
+      case COUNTING_ENTRIES:
+        if (currentchar == 0)
+          s->change_count++;
+        break;
       }
-    case SEEKING_END:
-      // At this point, we're just waiting to finish the master
-      // branch line, so we just wait for a '\0' and change
-      // mode as soon as we do, so we begin counting the entries
-      if (currentchar == 0)
-        mode = COUNTING_ENTRIES;
-      break;
-    case COUNTING_ENTRIES:
-      if (currentchar == 0)
-        s->change_count++;
-      break;
     }
   }
 
+  close(pipes[0]);
+  close(pipes[1]);
+
   // If there is an error with git (for example, we are not in a git
   // repository), exit the program.
-  int status = pclose(fp);
+  int status;
+  waitpid(pid, &status, 0);
   if (status)
     return status;
 
